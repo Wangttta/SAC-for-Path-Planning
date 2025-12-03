@@ -109,8 +109,11 @@ class PiNet(nn.Module):
 
 
 '''实例化环境'''
-from path_plan_env import StaticPathPlanning, NormalizedActionsWrapper
-env = NormalizedActionsWrapper(StaticPathPlanning())
+from path_plan_env import NormalizedActionsWrapper # regist to gym first
+import gymnasium as gym
+
+env = gym.make("PathSearch-v0")
+env = NormalizedActionsWrapper(env)
 obs_space = env.observation_space
 act_space = env.action_space
 
@@ -146,20 +149,20 @@ for episode in range(MAX_EPISODE):
     ## 重置回合奖励
     ep_reward = 0
     ## 获取初始观测
-    obs = env.reset()
+    obs, _ = env.reset()
     ## 进行一回合仿真
-    for steps in range(env.max_episode_steps):
+    for steps in range(env.unwrapped.max_episode_steps):
         # 决策
         act = agent.select_action(obs)
         # 仿真
-        next_obs, reward, done, info = env.step(act)
+        next_obs, reward, done, timeout, info = env.step(act)
         ep_reward += reward
         # 缓存
         agent.store_memory((obs, act, reward, next_obs, done))
         # 优化
         agent.learn()
         # 回合结束
-        if info["terminal"]:
+        if done or timeout:
             mean_reward = ep_reward / (steps + 1)
             print('回合: ', episode,'| 累积奖励: ', round(ep_reward, 2),'| 平均奖励: ', round(mean_reward, 2),'| 状态: ', info,'| 步数: ', steps) 
             break
@@ -167,7 +170,7 @@ for episode in range(MAX_EPISODE):
             obs = deepcopy(next_obs)
     #end for
 #end for
-agent.export("./path_plan_env/policy_static.onnx") # 导出策略模型
+agent.export("./model/policy_static.onnx") # 导出策略模型
 # agent.save("./checkpoint") # 存储算法训练进度
 # agent.load("./checkpoint") # 加载算法训练进度
 
