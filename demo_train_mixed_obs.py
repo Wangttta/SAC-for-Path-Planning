@@ -170,8 +170,10 @@ class PiNet(nn.Module):
 
 
 '''实例化环境'''
-from path_plan_env import DynamicPathPlanning
-env = DynamicPathPlanning()
+import path_plan_env # regist to gym first
+import gymnasium as gym
+
+env = gym.make("PathPlan-v0", use_sparse_reward=True) # 动作空间本身就是 -1,1
 obs_space = env.observation_space
 act_space = env.action_space
 
@@ -207,23 +209,22 @@ log = SummaryWriter(log_dir = "./tb_log")
 
 MAX_EPISODE = 50000
 LEARN_FREQ = 100
-OUTPUT_FREQ = 50
 for episode in range(MAX_EPISODE):
     ## 重置回合奖励
     ep_reward = 0
     ## 获取初始观测
-    obs = env.reset()
+    obs, _ = env.reset()
     ## 进行一回合仿真
-    for steps in range(env.max_episode_steps):
+    for steps in range(env.unwrapped.max_episode_steps):
         # 决策
         act = agent.select_action(obs)
         # 仿真
-        next_obs, reward, done, info = env.step(act)
+        next_obs, reward, done, timeout, info = env.step(act)
         ep_reward += reward
         # 缓存
         agent.store_memory((obs, act, reward, next_obs, done))
         # 回合结束
-        if info["terminal"]:
+        if done or timeout:
             mean_reward = ep_reward / (steps + 1)
             print('回合: ', episode,'| 累积奖励: ', round(ep_reward, 2),'| 平均奖励: ', round(mean_reward, 2),'| 状态: ', info,'| 步数: ', steps) 
             break
@@ -236,10 +237,9 @@ for episode in range(MAX_EPISODE):
     ## 训练
     if episode % LEARN_FREQ == 0:
         train_info = agent.learn()
-    if episode % OUTPUT_FREQ == 0:
-        env.plot(f"./output/out{episode}.png")
+
 #end for
-agent.export("./path_plan_env/policy_dynamic.onnx") # 导出策略模型
+agent.export("./model/policy_dynamic.onnx") # 导出策略模型
 # agent.save("./checkpoint") # 存储算法训练进度
 # agent.load("./checkpoint") # 加载算法训练进度
 
