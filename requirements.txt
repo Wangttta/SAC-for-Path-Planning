@@ -1,0 +1,5 @@
+torch>=2.2.0
+gymnasium<=1.2.0
+onnx>=1.13.1
+onnxruntime>=1.15.1
+cpprb==11.0.0

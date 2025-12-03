@@ -1,5 +1,16 @@
 # PyTorch版SAC-Auto强化学习算法与应用示例
 
+更新：
+1.弃用gym，使用gymnasium，环境支持向量化仿真
+2.通过gym.make和gym.make_vec创建环境
+3.通过make时设置render_mode="human"可视化环境，不用手动调用render，其余render_mode不可视化
+
+待更新：
+1.算法支持环境并行
+2.根据观测空间自动生成replay buffer，不用手动实现
+3.n-step replay 和 PER replay
+4.DQN、TD3、PPO等算法
+
 ## 零.SAC-Auto算法:
 
 ###### 自定义程度高的SAC-Auto算法，支持部署策略模型、备份训练过程、多源观测融合、PER等功能
@@ -138,24 +149,23 @@ agent.set_nn(
 
 要求在派生类中实现以下抽象方法（输入参数和返回数据的格式参考DocString)，可参考demo_train.py中派生类实现方法：
 
-|  **必须实现的方法**  | **功能**                                                                                                                                                                                                                                           |
-| :------------------------: | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-|           reset           | 重置经验池（Off-Policy算法一般用不到），也可用于初始化经验池（生成转移元组collections）                                                                                                                                                                  |
-|            push            | 经验存储：存入环境转移元组*(s, a, r, s_, done)* ，其中状态*s* 和下一个状态 *s_* （或观测 *obs* ）为array（或混合形式dict[any, array]、list[array]、tuple[array, ...]），动作 *a* 为array，奖励 *r* 为float， *s_* 是否存在 *done* 为bool。 |
-|           sample           | 经验采样：要求返回包含关键字*'s','a','r','s_','done'* 的*batch* 字典， *batch* 的每个key对应value为Tensor（或dict[any, Tensor]、list[Tensor]、tuple[Tensor, ...]）；PER的batch还要包含关键字 *'IS_weight'* ，对应的value为Tensor。                 |
-|      state_to_tensor      | 数据升维并转换：将Gym输出的1个*obs* 转换成 *batch obs* ，要求返回Tensor（或混合形式dict[any, Tensor]、list[Tensor]、tuple[Tensor, ...]）。                                                                                                           |
+|    **必须实现的方法**    | **功能**                                                                                                                                                                                                                                           |
+| :-----------------------------: | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+|              reset              | 重置经验池（Off-Policy算法一般用不到），也可用于初始化经验池（生成转移元组collections）                                                                                                                                                                  |
+|              push              | 经验存储：存入环境转移元组*(s, a, r, s_, done)* ，其中状态*s* 和下一个状态 *s_* （或观测 *obs* ）为array（或混合形式dict[any, array]、list[array]、tuple[array, ...]），动作 *a* 为array，奖励 *r* 为float， *s_* 是否存在 *done* 为bool。 |
+|             sample             | 经验采样：要求返回包含关键字*'s','a','r','s_','done'* 的*batch* 字典， *batch* 的每个key对应value为Tensor（或dict[any, Tensor]、list[Tensor]、tuple[Tensor, ...]）；PER的batch还要包含关键字 *'IS_weight'* ，对应的value为Tensor。                 |
+|         state_to_tensor         | 数据升维并转换：将Gym输出的1个*obs* 转换成 *batch obs* ，要求返回Tensor（或混合形式dict[any, Tensor]、list[Tensor]、tuple[Tensor, ...]）。                                                                                                           |
 | **非必须实现的方法/属性** | **功能**                                                                                                                                                                                                                                           |
-|            save            | 存储buffer数据，用于保存训练进度，可省略                                                                                                                                                                                                                 |
-|            load            | 加载buffer数据，用于加载训练进度，可省略                                                                                                                                                                                                                 |
-|     update_priorities     | 用于更新PER的优先级，非PER可省略                                                                                                                                                                                                                         |
-|       is_per（属性）       | 是否是PER回放，默认False                                                                                                                                                                                                                                 |
-|       is_rnn（属性）       | 是否RNN按episode回放，默认False                                                                                                                                                                                                                          |
-|       nbytes（属性）       | 用于查看经验池占用内存，默认0                                                                                                                                                                                                                            |
+|              save              | 存储buffer数据，用于保存训练进度，可省略                                                                                                                                                                                                                 |
+|              load              | 加载buffer数据，用于加载训练进度，可省略                                                                                                                                                                                                                 |
+|        update_priorities        | 用于更新PER的优先级，非PER可省略                                                                                                                                                                                                                         |
+|         is_per（属性）         | 是否是PER回放，默认False                                                                                                                                                                                                                                 |
+|         is_rnn（属性）         | 是否RNN按episode回放，默认False                                                                                                                                                                                                                          |
+|         nbytes（属性）         | 用于查看经验池占用内存，默认0                                                                                                                                                                                                                            |
 
 ##### 1.自定义Buffer示例
 
 ```python
-
 MAX_SIZE = int(2**20)
 OBS_SPACE = env.observation_space
 ACT_SPACE = env.action_space
@@ -209,6 +219,14 @@ class Buffer(BaseBuffer):
 	}
         return batch
 
+    def state_to_tensor(self, state: Obs, use_rnn=False) -> ObsBatch:
+	# Easy Obs
+        return th.FloatTensor(state).unsqueeze(0).to(self.device) # no_rnn: shape = (1, ...); use_rnn: shape = (1, 1, ...) 
+        # Mixed Obs
+        return {k: th.FloatTensor(state[k]).unsqueeze(0).to(self.device) for k in state.keys()}
+        return [th.FloatTensor(state[i]).unsqueeze(0).to(self.device) for i in range(len(state))]
+        return tuple(th.FloatTensor(state[i]).unsqueeze(0).to(self.device) for i in range(len(state)))
+
 # 为算法设置Buffer
 buffer = Buffer(MAX_SIZE, OBS_SPACE, ACT_SPACE) # 实例化buffer模块
 agent.set_buffer(buffer)
@@ -218,82 +236,66 @@ agent.set_buffer(buffer)
 
 ###### 路径规划环境包 path_plan_env
 
-| 包含的模块               | 说明                                                 |
+| 包含的模块/环境          | 说明                                                 |
 | ------------------------ | ---------------------------------------------------- |
 | LidarModel               | 激光雷达模拟（基于东北天坐标系）                     |
 | NormalizedActionsWrapper | 环境装饰器：非-1~1动作空间归一化，用于与算法适配     |
-| DynamicPathPlanning      | 动力学路径规划环境（动作空间-1~1，基于东天南坐标系） |
-| StaticPathPlanning       | 路径搜索环境（动作空间非-1~1）                       |
+| "PathPlan-v0"            | 动力学路径规划环境（动作空间-1~1，基于东天南坐标系） |
+| "PathSearch-v0"          | 路径搜索环境（动作空间非-1~1，记得归一化）          |
 
 ### (0).环境接口
 
-###### gym标准接口格式，初始化时可指定使用老版gym接口风格或新版gym接口风格
+###### gym标准接口格式
 
 ```python
 # 实例化环境
-from path_plan_env import DynamicPathPlanning
-env = DynamicPathPlanning(kwargs=...)
+import path_plan_env # 将路径规划环境添加到gym注册表
+import gymnasium as gym
+env = gym.make("PathPlan-v0", render_mode="human")
+
 # 训练/测试交互
-obs, info = env.reset(kwargs=...) # new gym style
-obs = env.reset(kwargs=...)       # old gym style
+obs, info = env.reset(seed=114514)
 while 1:
-    try:
-        env.render(kwargs=...) # 可视化路径规划(测试)
-        act = np.array([...]) # shape=(act_dim, ) range∈-1~1
-        obs, rew, done, truncated, info = env.step(act, kwargs=...) # new gym style
-        obs, rew, done, info = env.step(act, kwargs=...)            # old gym style
-    except AssertionError:
-        env.plot("fig.png", kwargs=...) # 输出规划结果(训练)
+    act = env.action_space.sample() # shape=(act_dim, ) range∈-1~1
+    obs, rew, done, timeout, info = env.step(act)
+    if done or timeout:
         break
 ```
 
-### (1).路径搜索环境（StaticPathPlanning）
+###### 支持向量化交互
 
-###### 几何层面规划，直接找n个点组成路径，学习组成路径的点
+```python
+# 实例化vector环境
+import path_plan_env # 将路径规划环境添加到gym注册表
+import gymnasium as gym
+from gymnasium.wrappers.vector import DictInfoToList
 
-##### 0.转移模型
+env = gym.make_vec("PathPlan-v0", num_envs=1024, render_mode="human")
+env = DictInfoToList(env)
 
-$$
-\mathbf{s}_{new} \gets \mathbf{s}_{old} + \mathbf{a}
-$$
+# 训练/测试交互
+obs, info = env.reset(seed=114514)
+for i in range(max_iterations):
+    act = env.action_space.sample() # shape=(num_envs, act_dim) range∈-1~1
+    obs, rew, done, timeout, info = env.step(act)
+```
 
-##### 1.观测空间&动作空间
-
-1.0观测空间（BoxSpace）:
-
-$$
-\mathbf{s} = \mathbf{o} \subset \text{Box} \left \{ x_{0},y_{0},\dots x_{n-1},y_{n-1}  \right \}
-$$
-
-| 观测空间             | n=6                            |
-| :------------------- | :----------------------------- |
-| 空间名（onnx输入名） | ”observation“                |
-| 空间类型             | Box                            |
-| 数据结构             | shape = (n, ); dtype = float32 |
-| low                  | [x_min, y_min] * n             |
-| high                 | [x_max, y_max] * n             |
-
-1.1动作空间（BoxSpace）:
-
-$$
-\mathbf{a} \subset \text{Box} \left \{ dx_{0},dy_{0},\dots dx_{n-1},dy_{n-1}  \right \}
-$$
-
-| 动作空间             | n=6                                        |
-| :------------------- | :----------------------------------------- |
-| 空间名（onnx输出名） | ”action“                                 |
-| 空间类型             | Box                                        |
-| 数据结构             | shape = (n, ); dtype = float32             |
-| low                  | [-(x_max-x_min)/10, -(y_max-y_min)/10] * n |
-| high                 | [+(x_max-x_min)/10, +(y_max-y_min)/10] * n |
-
-##### 2.仿真结果
-
-<img src="图片/Result.png" style="zoom:80%;" />
-
-### (2).动力学路径规划环境（DynamicPathPlanning）
+### (1).动力学路径规划环境（PathPlan-v0）
 
 ###### 动力学层面规划，学习控制量
+
+```python
+env = gym.make("PathPlan-v0", render_mode="human")
+"""
+gym.make参数:
+    max_time_steps (int): 最大仿真步数. 默认500.
+    dt (float): 决策周期. 默认0.5.
+    normalize_observation (bool): 是否输出归一化的观测. 默认True.
+    use_sparse_reward (bool): 是否只使用终端时刻奖励, 即不叠加过程奖励. 默认False
+    plot_interval (int): 绘图episode间隔. 默认50.
+    render_mode (str): 可视化模式.
+"""
+```
 
 ##### 0.雷达感知模型
 
@@ -368,7 +370,7 @@ D为距离、V为速度、q为视线角、points为雷达测距
 | 数据结构                     | shape = (N, 3); dtype = float32      |
 | low                          | [ [0, V_low, -pi] ] * N              |
 | high                         | [ [1.414*map_size, V_high, pi] ] * N |
-| **时序points观测空间** | **N=4，n=128**                      |
+| **时序points观测空间** | **N=4，n=128**                       |
 | 空间名（onnx输入名）         | “seq_points"                        |
 | 空间类型                     | Box                                  |
 | 数据结构                     | shape = (N, n) ; dtype = float32     |
@@ -389,41 +391,88 @@ $$
 | low                  | [-1, -1]                       |
 | high                 | [1, 1]                         |
 
-##### 3.训练结果
+##### 3.奖励函数
+注意：环境内置的_get_rew方法计算的奖励不保证收敛，仅提供了一个奖励设计示例代码，内置的onnx模型通过多轮训练得到，随轮次增大逐渐减小过程奖励的比重。
+_get_rew需要按实际需求设计，如果嫌麻烦，可直接去掉过程奖励（gym.make时设置use_sparse_reward=True），只使用终端时刻的稀疏奖励训练。收敛可能更困难，但能有效防止过程奖励导致的局部最优解或者reward hacking行为。
+
+##### 4.训练结果
 
 <img src="图片/amagi1.png" alt="img" style="zoom: 67%;" />
 
-<img src="图片/amagi2.png" alt="img" style="zoom: 80%;" />
-
-##### 4.仿真结果
+##### 5.仿真结果
 
 <img src="图片/Result.gif" style="zoom: 50%;" />
 
+<img src="图片/amagi2.png" alt="img" style="zoom: 80%;" />
+
+### (2).路径搜索环境（PathSearch-v0）
+
+###### 几何层面规划，直接找n个点组成路径，学习组成路径的点
+###### 搭着玩的环境，无任何意义（无法泛化），不如直接使用A*等搜索算法
+
+```python
+env = gym.make("PathSearch-v0", render_mode="human")
+"""
+gym.make参数:
+    num_pos (int): 起点终点之间的航点个数. 默认6.
+    max_search_steps (int): 最大搜索步数. 默认200.
+    render_mode (str): 可视化模式.
+"""
+```
+
+##### 0.转移模型
+
+$$
+\mathbf{s}_{new} \gets \mathbf{s}_{old} + \mathbf{a}
+$$
+
+##### 1.观测空间&动作空间
+
+1.0观测空间（BoxSpace）:
+
+$$
+\mathbf{s} = \mathbf{o} \subset \text{Box} \left \{ x_{0},y_{0},\dots x_{n-1},y_{n-1}  \right \}
+$$
+
+| 观测空间             | n=6                             |
+| :------------------- | :------------------------------ |
+| 空间名（onnx输入名） | ”observation“                 |
+| 空间类型             | Box                             |
+| 数据结构             | shape = (2n, ); dtype = float32 |
+| low                  | [x_min, y_min] * n              |
+| high                 | [x_max, y_max] * n              |
+
+1.1动作空间（BoxSpace）:
+
+$$
+\mathbf{a} \subset \text{Box} \left \{ dx_{0},dy_{0},\dots dx_{n-1},dy_{n-1}  \right \}
+$$
+
+| 动作空间             | n=6                                        |
+| :------------------- | :----------------------------------------- |
+| 空间名（onnx输出名） | ”action“                                 |
+| 空间类型             | Box                                        |
+| 数据结构             | shape = (2n, ); dtype = float32            |
+| low                  | [-(x_max-x_min)/10, -(y_max-y_min)/10] * n |
+| high                 | [+(x_max-x_min)/10, +(y_max-y_min)/10] * n |
+
+##### 2.仿真结果
+
+<img src="图片/Result.png" style="zoom:80%;" />
+
 ## 二.**Requirement**:
 
-python >= 3.9
+算法依赖项：
 
-SAC算法依赖项：
+gymnasium <= 1.2.0
 
-gym >= 0.21.0 （数据结构API）
+pytorch >= 1.10.2
 
-numpy >= 1.22.3 （数组运算API）
+onnx >= 1.13.1
 
-pytorch >= 1.10.2 （深度学习API）
+onnxruntime >= 1.15.1
 
-onnx >= 1.13.1 （模型部署API）
-
-onnxruntime >= 1.15.1 （模型推理API）
-
-非SAC算法依赖项：
-
-tensorboard （训练日志记录）
-
-scipy >= 1.7.3 （自定义Env数值积分）
-
-shapely >= 2.0.1 （自定义Env障碍表示）
-
-matplotlib >= 3.5.1 （自定义Env可视化）
+cpprb == 11.0.0
 
 ###### 广告：
 

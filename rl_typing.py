@@ -8,7 +8,7 @@ RL类型提示
 """
 import numpy as np
 import torch as th
-from gym import spaces
+from gymnasium import spaces
 from typing import Union, Literal, Optional
 
 
@@ -47,11 +47,11 @@ DeviceLike = Union[th.device, str, None]
 from torch.nn.modules.loss import _Loss as TorchLoss
 from torch.optim import Optimizer as TorchOptimizer
 
-from gym import Env as GymEnv
-from gym.spaces import Box as GymBox
-from gym.spaces import Discrete as GymDiscrete
-from gym.spaces import Tuple as GymTuple
-from gym.spaces import Dict as GymDict
+from gymnasium import Env as GymEnv
+from gymnasium.spaces import Box as GymBox
+from gymnasium.spaces import Discrete as GymDiscrete
+from gymnasium.spaces import Tuple as GymTuple
+from gymnasium.spaces import Dict as GymDict
 
 ObsSpace = spaces.Space                                             # 状态/观测空间: 任意
 ActSpace = Union[spaces.Box, spaces.Discrete, spaces.MultiDiscrete] # 动作/控制空间: Box连续, Discrete编码, MultiDiscrete离散
