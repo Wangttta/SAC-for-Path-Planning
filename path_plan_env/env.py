@@ -7,11 +7,11 @@
  @auther: HJ https://github.com/zhaohaojie1998
 """
 #
-import gym
+import gymnasium as gym
 import math
 import numpy as np
 import matplotlib.pyplot as plt
-from gym import spaces
+from gymnasium import spaces
 from copy import deepcopy
 from pathlib import Path
 from collections import deque
@@ -109,18 +109,32 @@ class DynamicPathPlanning(gym.Env):
     >>> dψ/dt = -g / V * tan(μ)
     >>> u = [nx, μ]
     """
+    metadata = {
+        "render_modes": ["human", ],
+        "render_fps": 1000,
+    }
 
-    def __init__(self, max_episode_steps=500, dt=0.5, normalize_observation=True, old_gym_style=True):
+    def __init__(
+        self,
+        max_time_steps=500, dt=0.5,
+        normalize_observation=True, use_sparse_reward=False,
+        plot_interval=50, render_mode=None, **kwargs
+    ):
         """
         Args:
-            max_episode_steps (int): 最大仿真步数. 默认500.
+            max_time_steps (int): 最大仿真步数. 默认500.
             dt (float): 决策周期. 默认0.5.
             normalize_observation (bool): 是否输出归一化的观测. 默认True.
-            old_gym_style (bool): 是否采用老版gym接口. 默认True.
+            use_sparse_reward (bool): 是否只使用终端时刻奖励, 即不叠加过程奖励. 默认False
+            plot_interval (int): 绘图episode间隔. 默认50.
+            render_mode (str): 可视化模式.
         """
         # 仿真
         self.dt = dt
-        self.max_episode_steps = max_episode_steps
+        self.max_episode_steps = max_time_steps
+        self.render_mode = render_mode
+        self.episode = -1
+        self.plot_interval = plot_interval
         self.log = Logger()
         # 障碍 + 雷达
         self.obstacles = MAP.obstacles
@@ -141,19 +155,25 @@ class DynamicPathPlanning(gym.Env):
         self.__render_not_called = True
         self.__need_reset = True
         self.__norm_observation = normalize_observation
-        self.__old_gym = old_gym_style
+        self.__use_sparse_reward = use_sparse_reward
         # plt设置
         plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
         plt.rcParams['axes.unicode_minus'] = False
         plt.close("all")
 
-    def reset(self, mode=0):
+    def reset(self, *, seed=None, options=None):
         """重置环境
-           mode=0, 随机初始化起点终点, 速度、方向随机
-           mode=1, 初始化起点终点到地图设置, 速度、方向随机
+           options['mode']=0, 随机初始化起点终点, 速度、方向随机
+           options['mode']=1, 初始化起点终点到地图设置, 速度、方向随机
         """
+        if self.episode % self.plot_interval == 0:
+            self.plot(f"./output/env_id-{id(self)}/episode-{self.episode}.png")
+
+        super().reset(seed=seed)
+        mode = 0 if options is None else options.get("mode", 0)
         self.__need_reset = False
         self.time_step = 0
+        self.episode += 1
         # 初始化航程/状态/控制
         while 1:
             self.state = self.state_space.sample()
@@ -191,8 +211,6 @@ class DynamicPathPlanning(gym.Env):
         self.log.length = [[self.L, self.D_last]] # 航程+距离
         self.log.curr_scan_pos = []               # 当前时刻扫描的障碍坐标
         # 输出
-        if self.__old_gym:
-            return self._norm_obs(obs)
         return self._norm_obs(obs), {}
     
     def _get_ctrl(self, act, tau=0.9):
@@ -272,33 +290,39 @@ class DynamicPathPlanning(gym.Env):
         q = self.deque_vector[-1][2]
         rew += math.sin(q) # 1~-1
         # 6.任务奖励
-        done = False
-        info = {'state': 'none'}
+        terminated = False
+        info = {'state': 'none', 'real_reward': 0}
         if d_min < D_SAFE: # 碰撞
             rew -= 150
-            done = True
+            terminated = True
             info['state'] = 'fail'
+            info['real_reward'] -= 150
         elif D < D_ERR: # 成功
             η = np.nanmax([3.5 - 2.5*self.L/(self.D_init+1e-8), 0.5]) # 航程折扣 (实现路径最短)
             # NOTE max返回nan, 输入为*args或ListLike; np.nanmax返回除了nan的max, 输入只能为ListLike
             rew += 200 * η # 100~700+
-            done = True
+            terminated = True
             info['state'] = 'sucess'
+            info['real_reward'] += 200 * η # 100~700+
         if V < V_MIN or V > V_MAX or d_min < D_BUFF:
             rew -= 5
+            info['real_reward'] -= 5
+            
         # 更新记忆
         self.exist_last = deepcopy(exist)
         self.D_last = deepcopy(D)
         # 输出
-        return rew, done, info
+        return rew, terminated, info
 
-    def step(self, act: np.ndarray, tau: float = None):
+    def step(self, act: np.ndarray, *, tau: float = None):
         """状态转移
         Args:
             act (np.ndarray): 动作a(取值-1~1).
             tau (float): 控制量u(取值u_min~u_max)的平滑系数: u = tau*u + (1-tau)*u_last. 默认None不平滑.
         """
         assert not self.__need_reset, "调用step前必须先reset"
+        if self.render_mode == "human":
+            self.render()
         # 数值鸡分
         self.time_step += 1
         u = self._get_ctrl(act, tau)
@@ -319,18 +343,17 @@ class DynamicPathPlanning(gym.Env):
         self.ctrl = deepcopy(u)
         # 获取转移元组
         obs = self._get_obs(new_state)
-        rew, done, info = self._get_rew()
-        info["done"] = done
+        rew, terminated, info = self._get_rew()
+        if self.__use_sparse_reward: # 不使用过程奖励
+            rew = info["real_reward"]
+        info["terminated"] = terminated
         info["truncated"] = truncated
-        if truncated or done:
-            info["terminal"] = True
-            self.__need_reset = True
-        else:
-            info["terminal"] = False
         info["reward"] = rew
         info["time_step"] = self.time_step
         info["voyage"] = self.L
         info["distance"] = self.D_last
+        if truncated or terminated:
+            self.__need_reset = True
         # 记录
         self.log.path.append(self.state[:2])
         self.log.ctrl.append(u)
@@ -338,9 +361,7 @@ class DynamicPathPlanning(gym.Env):
         self.log.yaw.append(self.state[3])
         self.log.length.append([self.L, self.D_last])
         # 输出
-        if self.__old_gym:
-            return self._norm_obs(obs), rew, done, info
-        return self._norm_obs(obs), rew, done, truncated, info
+        return self._norm_obs(obs), rew, terminated, truncated, info
     
     def _norm_obs(self, obs):
         """归一化观测"""
@@ -354,9 +375,8 @@ class DynamicPathPlanning(gym.Env):
         obs['seq_points'] = self._normalize_points(obs['seq_points'])
         return obs
     
-    def render(self, mode="human", figsize=[8,8]):
-        """测试时可视化环境, 和step交替调用 (不要和plot一起调用, 容易卡)"""
-        assert not self.__need_reset, "调用render前必须先reset"
+    def render(self, *, figsize=[8,8]):
+        """可视化环境"""
         # 创建绘图窗口
         if self.__render_not_called:
             self.__render_not_called = False
@@ -391,16 +411,17 @@ class DynamicPathPlanning(gym.Env):
         self.__plt_lidar_left.set_data([x, x1], [y, y1])
         self.__plt_lidar_right.set_data([x, x2], [y, y2])
         # 窗口暂停
-        plt.pause(0.001)
+        plt.pause(1.0 / self.metadata["render_fps"])
 
     def close(self): 
         """关闭环境"""
         self.__render_not_called = True
         self.__need_reset = True
+        self.episode = -1
         plt.close("render")
 
     def plot(self, file, figsize=[10,10], dpi=100):
-        """训练时观察输出状态 (不要和render一起调用, 容易卡)"""
+        """训练时观察输出状态"""
         file = Path(file).with_suffix(".png")
         file.parents[0].mkdir(parents=True, exist_ok=True)
         fig = plt.figure("Output", figsize=figsize)
@@ -582,17 +603,22 @@ class DynamicPathPlanning(gym.Env):
 #----------------------------- ↓↓↓↓↓ 路径搜索环境 ↓↓↓↓↓ ------------------------------#
 class StaticPathPlanning(gym.Env):
     """从航点搜索的角度进行规划"""
+    metadata = {
+        "render_modes": ["human", ],
+        "render_fps": 1000,
+    }
 
-    def __init__(self, num_pos=6, max_search_steps=200, old_gym_style=True):
+    def __init__(self, num_pos=6, max_search_steps=200, render_mode=None, **kwargs):
         """
         Args:
             num_pos (int): 起点终点之间的航点个数. 默认6.
             max_search_steps (int): 最大搜索步数. 默认200.
-            old_gym_style (bool): 是否采用老版gym接口. 默认True.
+            render_mode (str): 可视化模式.
         """
         self.num_pos = num_pos
         self.map = MAP
         self.max_episode_steps = max_search_steps
+        self.render_mode = render_mode
 
         lb = np.array(self.map.size[0] * num_pos)
         ub = np.array(self.map.size[1] * num_pos)
@@ -601,20 +627,16 @@ class StaticPathPlanning(gym.Env):
 
         self.__render_not_called = True
         self.__need_reset = True
-        self.__old_gym = old_gym_style
 
         plt.rcParams['font.sans-serif'] = ['Microsoft YaHei']
         plt.rcParams['axes.unicode_minus'] = False
         plt.close("all")
 
-    def reset(self):
+    def reset(self, *, seed=None, options=None):
+        super().reset(seed=seed)
         self.__need_reset = False
         self.time_steps = 0 # NOTE: 容易简写成step, 会和step method重名, 还不容易发现 BUG
         self.obs = self.observation_space.sample()
-        # New Gym: obs, info
-        # Old Gym: obs
-        if self.__old_gym:
-            return self.obs
         return self.obs, {}
     
     def step(self, act):
@@ -627,25 +649,22 @@ class StaticPathPlanning(gym.Env):
         Q = Critic(Pos_old, act) = Critic(Pos_old, Pos_new-Pos_old)
         """
         assert not self.__need_reset, "调用step前必须先reset"
+        if self.render_mode == "human":
+            self.render()
         # 状态转移
         obs = np.clip(self.obs + act, self.observation_space.low, self.observation_space.high)
         self.time_steps += 1
         # 计算奖励
-        rew, done, info = self._get_reward(obs)
+        rew, terminated, info = self._get_reward(obs)
         # 回合终止
         truncated = self.time_steps >= self.max_episode_steps
-        if truncated or done:
-            info["terminal"] = True
+        info['terminated'] = terminated
+        info["truncated"] = truncated
+        if truncated or terminated:
             self.__need_reset = True
-        else:
-            info["terminal"] = False
         # 更新状态
         self.obs = deepcopy(obs)
-        # New Gym: obs, rew, done, truncated, info
-        # Old Gym: obs, rew, done, info
-        if self.__old_gym:
-            return obs, rew, done, info
-        return obs, rew, done, truncated, info
+        return obs, rew, terminated, truncated, info
     
     def _get_reward(self, obs):
         traj = np.array(self.map.start_pos + obs.tolist() + self.map.end_pos) # [x,y,x,y,x,y,...]
@@ -684,18 +703,16 @@ class StaticPathPlanning(gym.Env):
         # 是否终止
         if num_theta == 0 and num_crash == 0:
             rew += 100  # 给个终端奖励
-            done = True # 轨迹合理
+            terminated = True # 轨迹合理
         else:
-            done = False # 轨迹不合理
+            terminated = False # 轨迹不合理
         info = {}
         info['碰撞次数'] = num_crash
         info['不平滑次数'] = num_theta
-        info['done'] = done
-        return rew, done, info
+        return rew, terminated, info
     
-    def render(self, mode="human"):
-        """环境可视化, 和step交替调用"""
-        assert not self.__need_reset, "调用render前必须先reset"
+    def render(self):
+        """环境可视化"""    
         if self.__render_not_called:
             self.__render_not_called = False
             plt.ion() # 打开交互绘图, 只能开一次
@@ -718,7 +735,7 @@ class StaticPathPlanning(gym.Env):
         plt.ylabel("z")
         plt.grid(alpha=0.3, ls=':')
         # 关闭窗口
-        plt.pause(0.001)
+        plt.pause(1.0 / self.metadata["render_fps"])
         plt.ioff()
 
     def close(self):
@@ -774,16 +791,14 @@ class NormalizedActionsWrapper(gym.ActionWrapper):
 
 if __name__ == '__main__':
     # MAP.show()
-    env = DynamicPathPlanning()
+    env = DynamicPathPlanning(render_mode="human")
     for ep in range(10):
         print(f"episode{ep}: begin")
-        obs = env.reset()
+        obs, _ = env.reset()
         while 1:
             try:
-                env.render()
-                obs, rew, done, info = env.step(np.array([0.5, 0.2]))
+                obs, _, _, _, info = env.step(np.array([0.5, 0.2]))
                 print(info)
             except AssertionError:
                 break
-        #env.plot(f"output{ep}")
         print(f"episode{ep}: end")
