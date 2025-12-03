@@ -280,45 +280,9 @@ for i in range(max_iterations):
     obs, rew, done, timeout, info = env.step(act)
 ```
 
-<<<<<<< HEAD
+
 ### (1).动力学路径规划环境（PathPlan-v0）
-=======
-##### 1.观测空间&动作空间
 
-1.0观测空间（BoxSpace）:
-
-$$
-\mathbf{s} = \mathbf{o} \subset \text{Box} \left \{ x_{0},y_{0},\dots x_{n-1},y_{n-1}  \right \}
-$$
-
-| 观测空间             | n=6                             |
-| :------------------- | :------------------------------ |
-| 空间名（onnx输入名） | ”observation“                 |
-| 空间类型             | Box                             |
-| 数据结构             | shape = (2n, ); dtype = float32 |
-| low                  | [x_min, y_min] * n              |
-| high                 | [x_max, y_max] * n              |
-
-1.1动作空间（BoxSpace）:
-
-$$
-\mathbf{a} \subset \text{Box} \left \{ dx_{0},dy_{0},\dots dx_{n-1},dy_{n-1}  \right \}
-$$
-
-| 动作空间             | n=6                                        |
-| :------------------- | :----------------------------------------- |
-| 空间名（onnx输出名） | ”action“                                 |
-| 空间类型             | Box                                        |
-| 数据结构             | shape = (2n, ); dtype = float32            |
-| low                  | [-(x_max-x_min)/10, -(y_max-y_min)/10] * n |
-| high                 | [+(x_max-x_min)/10, +(y_max-y_min)/10] * n |
-
-##### 2.仿真结果
-
-<img src="图片/Result.png" style="zoom:80%;" />
-
-### (2).动力学路径规划环境（DynamicPathPlanning）
->>>>>>> a21c5e94e27dcfbc3e9e695ce7c6c710a1cb676c
 
 ###### 动力学层面规划，学习控制量
 
